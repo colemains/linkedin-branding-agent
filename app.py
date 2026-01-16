@@ -1,55 +1,31 @@
-import gradio as gr
-from langchain_core.prompts import PromptTemplate
-from huggingface_hub import InferenceClient
-import os
+import gradio as gr  # pyright: ignore[reportMissingImports]
+import joblib  # pyright: ignore[reportMissingImports]
+import re
+from urllib.parse import urlparse
 
-# Use HF_TOKEN environment variable
-hf_token = os.getenv("HF_TOKEN")
+model = joblib.load('url_model.pkl')
 
-# Initialize the Inference Client directly (avoids langchain_huggingface StopIteration bug)
-client = InferenceClient(
-    model="mistralai/Mistral-7B-Instruct-v0.1",
-    token=hf_token
-)
-
-template = """You are a professional LinkedIn branding expert for a cybersecurity-to-AI transitioning analyst.
-Generate an engaging LinkedIn post (200-300 words) about these recent achievements:
-{achievements}
-
-Style: Professional yet enthusiastic, first-person ("I" statements), include calls to action (e.g., "Connect if you're in AI/security!"), relevant hashtags (#Cybersecurity #AI #MachineLearning #CareerTransition), and emojis sparingly.
-End with a question to boost engagement."""
-
-prompt = PromptTemplate(template=template, input_variables=["achievements"])
-
-def generate_post(custom_input=None):
-    if custom_input:
-        achievements = custom_input
-    else:
-        try:
-            with open('achievements.txt', 'r') as f:
-                achievements = f.read()
-        except:
-            achievements = "No achievements logged yet."
-    
-    # Format the prompt
-    formatted_prompt = prompt.format(achievements=achievements)
-    
-    # Call the Inference API directly
+def extract_features(url):
+    # Add scheme if missing for proper parsing
+    if not url.startswith(('http://', 'https://')):
+        url = 'http://' + url
+    features = {}
+    features['length'] = len(url)
+    features['dots'] = url.count('.')
+    features['https'] = 1 if url.startswith('https') else 0
     try:
-        response = client.text_generation(formatted_prompt, max_new_tokens=400)
-        return response if response else "No response generated. Please try again."
-    except Exception as e:
-        error_msg = str(e)
-        # Return detailed error for debugging
-        return f"Error: {error_msg}\n\nDebug: Check that HF_TOKEN is set in Space secrets with inference permissions."
+        parsed = urlparse(url)
+        features['ip'] = 1 if re.search(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', parsed.netloc) else 0
+    except:
+        features['ip'] = 0
+    features['at'] = 1 if '@' in url else 0
+    features['hyphens'] = url.count('-')
+    return [list(features.values())]
 
-iface = gr.Interface(
-    fn=generate_post,
-    inputs=gr.Textbox(label="Optional: Paste custom achievements (or leave blank to use achievements.txt)", lines=5),
-    outputs=gr.Textbox(label="Ready-to-Post LinkedIn Draft", lines=10),
-    title="LinkedIn Branding AI Agent",
-    description="Generates polished posts from your logged achievements. Run weekly for consistent branding!"
-)
+def predict(url):
+    feats = extract_features(url)
+    pred = model.predict(feats)[0]
+    return "Phishing Detected! 🚨" if pred == 1 else "Safe URL ✅"
 
-if __name__ == "__main__":
-    iface.launch()
+iface = gr.Interface(fn=predict, inputs="text", outputs="text", title="AI Phishing URL Detector")
+iface.launch(share=False, server_name="127.0.0.1", server_port=7860)

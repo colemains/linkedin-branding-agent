@@ -1,3 +1,0 @@
-gradio
-langchain
-langchain-ollama
